@@ -1,20 +1,31 @@
 import { vi } from "vitest"
 
 export function stubBrowerFunctions() {
-  vi.spyOn(window, "matchMedia").mockImplementation((_query: string): MediaQueryList => {
+  vi.stubGlobal("matchMedia", (_query: string): MediaQueryList => {
     return {
       matches: false,
-      addListener(_callback: ((this: MediaQueryList, ev: MediaQueryListEvent) => unknown) | null) {},
-      addEventListener(_name: string, _listener: EventListenerOrEventListenerObject) {},
-      removeEventListener(_name: string, _listener: EventListenerOrEventListenerObject) {},
+      addListener(_callback: ((this: MediaQueryList, ev: MediaQueryListEvent) => unknown) | null) {
+        // Mock implementation
+      },
+      addEventListener(_name: string, _listener: EventListenerOrEventListenerObject) {
+        // Mock implementation
+      },
+      removeEventListener(_name: string, _listener: EventListenerOrEventListenerObject) {
+        // Mock implementation
+      },
     } as MediaQueryList
   })
 
   class ResizeObserver {
-    constructor() {}
-    observe() {}
-    unobserve() {}
-    disconnect() {}
+    observe() {
+      // Mock implementation
+    }
+    unobserve() {
+      // Mock implementation
+    }
+    disconnect() {
+      // Mock implementation
+    }
   }
   vi.stubGlobal("ResizeObserver", ResizeObserver)
 }

@@ -1,4 +1,4 @@
-import { HTMLAttributes } from "react"
+import type { HTMLAttributes } from "react"
 
 export const MoonIcon = (props: HTMLAttributes<SVGElement>) => (
   <svg
@@ -120,7 +120,7 @@ export const InfoIcon = (props: HTMLAttributes<SVGElement>) => (
   <svg
     xmlns="http://www.w3.org/2000/svg"
     fill="none"
-    viewBox="0 0 24 24"
+    viewBox="2.25 2.25 19.5 19.5"
     strokeWidth={1.5}
     stroke="currentColor"
     {...props}
@@ -130,6 +130,51 @@ export const InfoIcon = (props: HTMLAttributes<SVGElement>) => (
       strokeLinejoin="round"
       d="m11.25 11.25.041-.02a.75.75 0 0 1 1.063.852l-.708 2.836a.75.75 0 0 0 1.063.853l.041-.021M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9-3.75h.008v.008H12V8.25Z"
     />
+  </svg>
+)
+
+export const ChevronDownIcon = (props: HTMLAttributes<SVGElement>) => (
+  <svg
+    xmlns="http://www.w3.org/2000/svg"
+    fill="none"
+    viewBox="0 0 24 24"
+    strokeWidth={1.5}
+    stroke="currentColor"
+    {...props}
+  >
+    <path strokeLinecap="round" strokeLinejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" />
+  </svg>
+)
+
+export const QuestionMarkCircleIcon = (props: HTMLAttributes<SVGElement>) => (
+  <svg
+    xmlns="http://www.w3.org/2000/svg"
+    fill="none"
+    viewBox="2.25 2.25 19.5 19.5"
+    strokeWidth={1.5}
+    stroke="currentColor"
+    {...props}
+  >
+    <path
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      d="M9.879 7.519c1.171-1.025 3.071-1.025 4.242 0 1.172 1.025 1.172 2.687 0 3.712-.203.179-.43.326-.67.442-.745.361-1.45.999-1.45 1.827v.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9 5.25h.008v.008H12v-.008Z"
+    />
+  </svg>
+)
+
+export const SpinnerIcon = ({ className = "", ...props }: HTMLAttributes<SVGElement>) => (
+  <svg
+    xmlns="http://www.w3.org/2000/svg"
+    fill="none"
+    viewBox="0 0 24 24"
+    strokeWidth={2}
+    stroke="currentColor"
+    className={`animate-spin ${className}`}
+    {...props}
+  >
+    <circle cx="12" cy="12" r="9" opacity="0.25" />
+    <path strokeLinecap="round" d="M21 12a9 9 0 0 0-9-9" />
   </svg>
 )
 

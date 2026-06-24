@@ -2,63 +2,83 @@ name: PR Tests
 on:
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   coverage-goshujin:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: goshujin
+          persist-credentials: false
 
       - name: "Install Node"
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: "22"
-          cache: "yarn"
+
+      - name: "Install pnpm"
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+        with:
+          version: 10
 
       - name: "Run Test with Coverage"
         run: |
-          yarn install
-          yarn build:frontend
-          yarn coverage
+          pnpm install --frozen-lockfile
+          pnpm build:frontend
+          pnpm coverage --testTimeout 15000
 
       - name: "Upload Coverage"
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: coverage-goshujin
           path: coverage
 
   test:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: ${{ github.ref }}
+          persist-credentials: false
 
       - name: "Install Node"
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: "22"
-          cache: "yarn"
+
+      - name: "Install pnpm"
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+        with:
+          version: 10
 
       - name: "Install Deps"
-        run: yarn install
+        run: pnpm install --frozen-lockfile
 
       - name: "Build Frontend"
-        run: yarn build:frontend
+        run: pnpm build:frontend
 
       - name: "Lint"
         run: |
-          yarn prettier -c .
-          yarn eslint .
+          pnpm prettier -c .
+          pnpm lint
+
+      - name: "Type Check"
+        run: pnpm typecheck
 
       - name: "Run Test with Coverage"
-        run: yarn coverage
+        run: pnpm coverage --testTimeout 15000
 
       - name: "Upload Coverage"
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: coverage-head
           path: coverage
@@ -66,22 +86,27 @@ jobs:
   report-coverage:
     needs: test
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
 
       - name: "Download HEAD coverage artifacts"
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: coverage-head
           path: coverage
 
       - name: "Download goshujin coverage artifacts"
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: coverage-goshujin
           path: coverage-goshujin
 
       - name: "Report Coverage"
-        uses: davelosert/vitest-coverage-report-action@v2
+        uses: davelosert/vitest-coverage-report-action@3c054a2d2e2ca45446417ad5d6d5eb33092af8f1 # v2.12.1
         with:
           json-summary-compare-path: coverage-goshujin/coverage-summary.json

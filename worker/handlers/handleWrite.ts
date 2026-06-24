@@ -1,34 +1,39 @@
 import { verifyAuth } from "../pages/auth.js"
-import { decode, genRandStr, WorkerError } from "../common.js"
-import { createPaste, getPasteMetadata, pasteNameAvailable, updatePaste } from "../storage/storage.js"
+import { decode, genRandStr, WorkerError, timingSafeEqual } from "../common.js"
 import {
-  DEFAULT_PASSWD_LEN,
-  NAME_REGEX,
-  PASTE_NAME_LEN,
-  PRIVATE_PASTE_NAME_LEN,
-  PASSWD_SEP,
-  MIN_PASSWD_LEN,
-  MAX_PASSWD_LEN,
-} from "../../shared/constants.js"
+  createPaste,
+  getPasteMetadata,
+  metaResponseFromMetadata,
+  pasteNameAvailable,
+  updatePaste,
+} from "../storage/storage.js"
+import { DEFAULT_PASSWD_LEN, PASTE_NAME_LEN, PRIVATE_PASTE_NAME_LEN, PASSWD_SEP } from "../../shared/constants.js"
 import { parsePath, parseSize, parseExpiration } from "../../shared/parsers.js"
-import { PasteResponse } from "../../shared/interfaces.js"
+import { verifyName, verifyPassword } from "../../shared/verify.js"
+import type { PasteResponse } from "../../shared/interfaces.js"
 import { MaxFileSizeExceededError, MultipartParseError, parseMultipartRequest } from "@mjackson/multipart-parser"
-import { handleMPUComplete, handleMPUCreate, handleMPUCreateUpdate, handleMPUResume } from "./handleMPU.js"
+import {
+  handleMPUAbort,
+  handleMPUComplete,
+  handleMPUCreate,
+  handleMPUCreateUpdate,
+  handleMPUResume,
+} from "./handleMPU.js"
 
-type ParsedMultipartPart = {
+interface ParsedMultipartPart {
   filename?: string
   content: ReadableStream | ArrayBuffer
   contentAsString: () => string
   contentLength: number
 }
 
-async function multipartToMap(req: Request, sizeLimit: number): Promise<Map<string, ParsedMultipartPart>> {
+async function multipartToMap(req: Request, sizeLimit: string): Promise<Map<string, ParsedMultipartPart>> {
   const partsMap = new Map<string, ParsedMultipartPart>()
   try {
-    await parseMultipartRequest(req, { maxFileSize: sizeLimit }, async (part) => {
+    for await (const part of parseMultipartRequest(req, { maxFileSize: parseSize(sizeLimit)! })) {
       if (part.name) {
         if (part.isFile) {
-          const arrayBuffer = await part.arrayBuffer()
+          const arrayBuffer = part.arrayBuffer
           partsMap.set(part.name, {
             filename: part.filename,
             content: arrayBuffer,
@@ -36,7 +41,7 @@ async function multipartToMap(req: Request, sizeLimit: number): Promise<Map<stri
             contentAsString: () => decode(arrayBuffer),
           })
         } else {
-          const arrayBuffer = await part.arrayBuffer()
+          const arrayBuffer = part.arrayBuffer
           partsMap.set(part.name, {
             filename: part.filename,
             content: arrayBuffer,
@@ -45,12 +50,12 @@ async function multipartToMap(req: Request, sizeLimit: number): Promise<Map<stri
           })
         }
       }
-    })
+    }
   } catch (err) {
     if (err instanceof MaxFileSizeExceededError) {
-      throw new WorkerError(413, `payload too large (max ${sizeLimit} bytes allowed)`)
+      throw new WorkerError(413, `payload too large (max ${sizeLimit} allowed)`)
     } else if (err instanceof MultipartParseError) {
-      console.error(err)
+      console.warn("Failed to parse multipart request:", err.message)
       throw new WorkerError(400, "Failed to parse multipart request")
     } else {
       throw err
@@ -77,11 +82,13 @@ export async function handlePostOrPut(
 
   let isMPUComplete = false
   if (url.pathname === "/mpu/create" && !isPut) {
-    return handleMPUCreate(request, env)
+    return await handleMPUCreate(request, env)
   } else if (url.pathname === "/mpu/create-update" && !isPut) {
-    return handleMPUCreateUpdate(request, env)
+    return await handleMPUCreateUpdate(request, env)
   } else if (url.pathname === "/mpu/resume" && isPut) {
-    return handleMPUResume(request, env)
+    return await handleMPUResume(request, env)
+  } else if (url.pathname === "/mpu/abort" && !isPut) {
+    return await handleMPUAbort(request, env)
   } else if (url.pathname === "/mpu/complete") {
     isMPUComplete = true // we will handle mpu complete later since it is uploaded with formdata
   } else if (url.pathname.startsWith("/mpu/")) {
@@ -95,7 +102,7 @@ export async function handlePostOrPut(
     throw new WorkerError(400, `bad usage, please use 'multipart/form-data' instead of ${contentType}`)
   }
 
-  const parts = await multipartToMap(request, parseSize(env.R2_MAX_ALLOWED)!)
+  const parts = await multipartToMap(request, env.R2_MAX_ALLOWED)
 
   if (!parts.has("c")) {
     throw new WorkerError(400, "cannot find content in formdata")
@@ -122,23 +129,18 @@ export async function handlePostOrPut(
   }
 
   // check if password is legal
-  // TODO: sync checks to frontend
   if (passwdFromForm) {
-    if (passwdFromForm.length > MAX_PASSWD_LEN) {
-      throw new WorkerError(400, `password too long (${passwdFromForm.length} > ${MAX_PASSWD_LEN})`)
-    } else if (passwdFromForm.length < MIN_PASSWD_LEN) {
-      throw new WorkerError(400, `password too short (${passwdFromForm.length} < ${MIN_PASSWD_LEN})`)
-    } else if (passwdFromForm.includes("\n")) {
-      throw new WorkerError(400, `password should not contain newline`)
-    }
+    const [ok, msg] = verifyPassword(passwdFromForm)
+    if (!ok) throw new WorkerError(400, msg)
   }
 
   // check if name is legal
   if (nameFromForm !== undefined && isPut) {
     throw new WorkerError(400, `Cannot set name for a PUT request`)
   }
-  if (nameFromForm !== undefined && !NAME_REGEX.test(nameFromForm)) {
-    throw new WorkerError(400, `Name ${nameFromForm} not satisfying regexp ${NAME_REGEX}`)
+  if (nameFromForm !== undefined) {
+    const [ok, msg] = verifyName(nameFromForm)
+    if (!ok) throw new WorkerError(400, msg)
   }
 
   function makeResponse(created: PasteResponse, additionalHeaders: Record<string, string | undefined> = {}): Response {
@@ -159,7 +161,7 @@ export async function handlePostOrPut(
   if (isPut) {
     let pasteName: string | undefined
     let password: string | undefined
-    // if isMPCComplete, we cannot parse path
+    // if isMPUComplete, we cannot parse path
     if (!isMPUComplete) {
       const parsed = parsePath(url.pathname)
       if (parsed.password === undefined) {
@@ -182,12 +184,12 @@ export async function handlePostOrPut(
     }
 
     // no need to check password for MPCComplete, it is already checked on creation
-    if (!isMPUComplete && password !== originalMetadata.passwd) {
+    if (!isMPUComplete && !timingSafeEqual(password, originalMetadata.passwd)) {
       throw new WorkerError(403, `incorrect password for paste ‘${pasteName}’`)
     }
 
     const newPasswd = passwdFromForm || originalMetadata.passwd
-    await updatePaste(env, pasteName, content, originalMetadata, {
+    const newMetadata = await updatePaste(env, pasteName, content, originalMetadata, {
       expirationSeconds,
       now,
       passwd: newPasswd,
@@ -199,10 +201,10 @@ export async function handlePostOrPut(
     })
     return makeResponse(
       {
+        ...metaResponseFromMetadata(newMetadata),
         url: accessUrl(pasteName),
         manageUrl: manageUrl(pasteName, newPasswd),
         expirationSeconds,
-        expireAt: new Date(now.getTime() + 1000 * expirationSeconds).toISOString(),
       },
       { etag: r2Object?.httpEtag },
     )
@@ -226,7 +228,7 @@ export async function handlePostOrPut(
     const r2Object = isMPUComplete ? await handleMPUComplete(request, env, uploadedParts!) : undefined
 
     const password = passwdFromForm || genRandStr(DEFAULT_PASSWD_LEN)
-    await createPaste(env, pasteName, content, {
+    const newMetadata = await createPaste(env, pasteName, content, {
       expirationSeconds,
       now,
       passwd: password,
@@ -239,10 +241,10 @@ export async function handlePostOrPut(
 
     return makeResponse(
       {
+        ...metaResponseFromMetadata(newMetadata),
         url: accessUrl(pasteName),
         manageUrl: manageUrl(pasteName, password),
         expirationSeconds,
-        expireAt: new Date(now.getTime() + 1000 * expirationSeconds).toISOString(),
       },
       { etag: r2Object?.httpEtag },
     )

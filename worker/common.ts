@@ -15,6 +15,10 @@ export function atob_utf8(value: string): string {
   )
 }
 
+export function escapeHtml(str: string): string {
+  return str.replace(/[&<>"']/g, (m) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[m]!)
+}
+
 export class WorkerError extends Error {
   public statusCode: number
   constructor(statusCode: number, msg: string) {
@@ -43,19 +47,21 @@ export function genRandStr(len: number) {
   return str
 }
 
-export function escapeHtml(str: string): string {
-  const tagsToReplace: Map<string, string> = new Map([
-    ["&", "&amp;"],
-    ["<", "&lt;"],
-    [">", "&gt;"],
-    ['"', "&quot"],
-    ["'", "&#x27"],
-  ])
-  return str.replace(/[&<>"']/g, function (tag): string {
-    return tagsToReplace.get(tag) || tag
-  })
+// Workers extension to SubtleCrypto, mirrored from worker-configuration.d.ts.
+// DOM lib's SubtleCrypto interface (from tsconfig "lib": ["dom"]) lacks this
+// method, and the class declaration in worker-configuration.d.ts doesn't merge
+// with it; a local interface augmentation makes the method visible.
+declare global {
+  interface SubtleCrypto {
+    timingSafeEqual(a: ArrayBuffer | ArrayBufferView, b: ArrayBuffer | ArrayBufferView): boolean
+  }
 }
 
-export function isLegalUrl(url: string): boolean {
-  return URL.canParse(url)
+export function timingSafeEqual(a: string | undefined | null, b: string): boolean {
+  if (a === undefined || a === null) return false
+  const encoder = new TextEncoder()
+  const bufA = encoder.encode(a)
+  const bufB = encoder.encode(b)
+  if (bufA.byteLength !== bufB.byteLength) return false
+  return crypto.subtle.timingSafeEqual(bufA, bufB)
 }

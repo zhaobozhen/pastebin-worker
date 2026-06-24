@@ -6,7 +6,9 @@ This directory contains a set of scripts that facilitate the usage and developme
 
 This is a wrapper script to make it easier to use our pastebin.
 
-**Requirements**: `bash`, `jq`, `getopt`, `curl`
+**Requirements**: `python3` (>=3.9) with the `requests` package available.
+
+The `cryptography` package is only required when using client-side encryption (`post -E` / `update -E`, or fetching an encrypted paste with `get`). Plain pastes work without it.
 
 **Installation**: download `pb` to your `PATH` and give it execution permission. For example:
 
@@ -29,19 +31,19 @@ Usage:
   pb [-h|--help]
     print this help message
 
-  pb [p|post] [OPTIONS] [-f] FILE
-    upload your text to pastebin, if neither 'FILE' and 'CONTENT' are given,
-    read the paste from stdin.
+  pb [p|post] [OPTIONS]
+    upload your text to pastebin, if neither '-f FILE' nor '-c CONTENT' are
+    given, read the paste from stdin.
 
-  pb [u|update] NAME[:PASSWD]
-    Update your text to pastebin, if neither 'FILE' and 'CONTENT' are given,
-    read the paste from stdin. If 'PASSWD' is not given, try to read password
-    from the history file.
+  pb [u|update] [OPTIONS] NAME[:PASSWD]
+    Update your text to pastebin, if neither '-f FILE' nor '-c CONTENT' are
+    given, read the paste from stdin. If 'PASSWD' is not given, try to read
+    password from the history file.
 
   pb [g|get] [OPTIONS] NAME[.EXT]
     fetch the paste with name 'NAME' and extension 'EXT'
 
-  pb [d|delete] [OPTIONS] NAME
+  pb [d|delete] [OPTIONS] NAME[:PASSWD]
     delete the paste with name 'NAME'
 
 Options:
@@ -52,6 +54,13 @@ Options:
     -s, --passwd PASSWD     the password
     -p, --private           make the generated paste name longer for better privacy
     -x, --clip              clip the url to the clipboard
+    -E, --encrypt           client-side encrypt with a fresh AES-GCM key.
+                            The key is recorded in the history file and the
+                            decryption URL is printed as `decryptionUrl` in
+                            the response (the server response itself never
+                            contains the key)
+    -F, --filename NAME     override the filename stored with the paste
+                            (defaults to the basename of the source file, if any)
 
   update options:
     -f, --file FILE         read the paste from file
@@ -59,17 +68,33 @@ Options:
     -e, --expire SECONDS    the expiration time of the paste (in seconds)
     -s, --passwd PASSWD     the password
     -x, --clip              clip the url to the clipboard
+    -E, --encrypt           re-encrypt with a fresh AES-GCM key on update
+    -F, --filename NAME     override the filename stored with the paste
 
   get options:
-    -l, --lang LANG         highlight the paste with language 'LANG' in a web page
-    -m, --mime MIME         set the 'Content-Type' header according to mime-type MIME
     -o, --output FILE       output the paste in file 'FILE'
     -u, --url               make a 302 URL redirection
+    --meta                  fetch /m/<name> metadata as pretty JSON
+    -K, --key KEY           decryption key (overrides history lookup).
+                            Only used when the paste is encrypted
+    --no-decrypt            do not decrypt encrypted pastes;
+                            write raw ciphertext (iv || ct || tag) instead
+    --save [DIR]            save the paste under DIR using the server-provided
+                            filename. DIR defaults to the current directory and
+                            is created if missing. Falls back to the paste name
+                            when the server has no filename
+    -f, --force             with --save, overwrite an existing file without
+                            prompting (non-interactive callers must pass -f
+                            to overwrite). Also bypasses the binary-output
+                            guard: pb refuses to dump binary content to a
+                            terminal (NUL byte detected) unless -f is given;
+                            piping to another process or using -o/--save
+                            always works
 
   delete options:
     none
 
   general options:
-    -v, --verbose           display the 'underlying' curl command
-    -d, --dry               do a dry run, executing no 'curl' command at all
+    -v, --verbose           log the planned request (method, URL, fields)
+    -d, --dry               do a dry run, sending no HTTP request at all
 ```

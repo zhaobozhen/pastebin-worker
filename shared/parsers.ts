@@ -1,9 +1,15 @@
 import { PASSWD_SEP } from "./constants.js"
 
+export class ParseError extends Error {
+  constructor(msg: string) {
+    super(msg)
+  }
+}
+
 export function parseSize(sizeStr: string): number | null {
   sizeStr = sizeStr.trim()
-  const EXPIRE_REGEX = /^[\d.]+\s*[KMG]?$/
-  if (!EXPIRE_REGEX.test(sizeStr)) {
+  const SIZE_REGEX = /^\d+(\.\d+)?\s*[KMG]?$/
+  if (!SIZE_REGEX.test(sizeStr)) {
     return null
   }
 
@@ -17,16 +23,12 @@ export function parseSize(sizeStr: string): number | null {
 
 export function parseExpiration(expirationStr: string): number | null {
   expirationStr = expirationStr.trim()
-  const EXPIRE_REGEX = /^[\d.]+\s*[smhd]?$/
+  const EXPIRE_REGEX = /^\d+(\.\d+)?\s*[smhd]?$/
   if (!EXPIRE_REGEX.test(expirationStr)) {
     return null
   }
 
   let expirationSeconds = parseFloat(expirationStr)
-  if (isNaN(expirationSeconds)) {
-    return null
-  }
-
   const lastChar = expirationStr[expirationStr.length - 1]
   if (lastChar === "m") expirationSeconds *= 60
   else if (lastChar === "h") expirationSeconds *= 3600
@@ -36,15 +38,12 @@ export function parseExpiration(expirationStr: string): number | null {
 
 export function parseExpirationReadable(expirationStr: string): string | null {
   expirationStr = expirationStr.trim()
-  const EXPIRE_REGEX = /^[\d.]+\s*[smhd]?$/
+  const EXPIRE_REGEX = /^\d+(\.\d+)?\s*[smhd]?$/
   if (!EXPIRE_REGEX.test(expirationStr)) {
     return null
   }
 
   const num = parseFloat(expirationStr)
-  if (isNaN(num)) {
-    return null
-  }
   const lastChar = expirationStr[expirationStr.length - 1]
   if (lastChar === "m") return `${num} minute${num > 1 ? "s" : ""}`
   else if (lastChar === "h") return `${num} hour${num > 1 ? "s" : ""}`
@@ -52,7 +51,7 @@ export function parseExpirationReadable(expirationStr: string): string | null {
   return `${num} second${num > 1 ? "s" : ""}`
 }
 
-export type ParsedPath = {
+export interface ParsedPath {
   name: string
   role?: string
   password?: string
@@ -104,6 +103,11 @@ export function parsePath(pathname: string): ParsedPath {
     short = pathname.slice(0, endOfShort)
     passwd = pathname.slice(endOfShort + 1)
   }
+
+  if (!short) {
+    throw new ParseError(`invalid path: paste name is empty`)
+  }
+
   return { role, name: short, password: passwd, ext, filename }
 }
 
@@ -111,17 +115,17 @@ export function parseFilenameFromContentDisposition(contentDisposition: string):
   let filename: string | undefined = undefined
 
   const filenameStarRegex = /filename\*=UTF-8''([^;]*)/i
-  const filenameStarMatch = contentDisposition.match(filenameStarRegex)
+  const filenameStarMatch = filenameStarRegex.exec(contentDisposition)
 
-  if (filenameStarMatch && filenameStarMatch[1]) {
+  if (filenameStarMatch?.[1]) {
     filename = decodeURIComponent(filenameStarMatch[1])
   }
 
   if (!filename) {
     const filenameRegex = /filename="([^"]*)"/i
-    const filenameMatch = contentDisposition.match(filenameRegex)
+    const filenameMatch = filenameRegex.exec(contentDisposition)
 
-    if (filenameMatch && filenameMatch[1]) {
+    if (filenameMatch?.[1]) {
       filename = filenameMatch[1]
     }
   }

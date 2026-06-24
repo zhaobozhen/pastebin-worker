@@ -7,15 +7,27 @@ export const mockedPasteUpload: PasteResponse = {
   manageUrl: "https://example.com/abcd:aaaaaaaaaaaaaaaaaa",
   expireAt: "2025-05-01T00:00:00.000Z",
   expirationSeconds: 300,
+  lastModifiedAt: "2025-04-30T23:55:00.000Z",
+  createdAt: "2025-04-30T23:55:00.000Z",
+  sizeBytes: 9,
+  location: "KV",
 }
 
 export const mockedPasteContent = "something"
 
 export const server = setupServer(
-  http.post(`${APIUrl}/`, () => {
+  http.post(`${__WRANGLER_CONFIG__.DEPLOY_URL}/`, () => {
     return HttpResponse.json(mockedPasteUpload)
   }),
-  http.get(`${APIUrl}/abcd`, () => {
+  http.head(`${__WRANGLER_CONFIG__.DEPLOY_URL}/abcd`, () => {
+    return new HttpResponse(null, {
+      headers: {
+        "Content-Type": "text/plain;charset=UTF-8",
+        "Content-Length": String(new TextEncoder().encode(mockedPasteContent).length),
+      },
+    })
+  }),
+  http.get(`${__WRANGLER_CONFIG__.DEPLOY_URL}/abcd`, () => {
     return HttpResponse.text(mockedPasteContent)
   }),
 )
@@ -37,15 +49,14 @@ afterAll(() => {
 
 import "@testing-library/jest-dom/vitest"
 import { userEvent } from "@testing-library/user-event"
-import { PasteResponse } from "../../shared/interfaces.js"
+import type { PasteResponse } from "../../shared/interfaces.js"
 import { setupServer } from "msw/node"
 import { http, HttpResponse } from "msw"
 import { stubBrowerFunctions, unStubBrowerFunctions } from "./testUtils.js"
-import { APIUrl } from "../utils/utils.js"
 
 describe("Pastebin", () => {
   it("can upload", async () => {
-    render(<PasteBin />)
+    render(<PasteBin config={__WRANGLER_CONFIG__} />)
 
     const title = screen.getByText("Pastebin Worker")
     expect(title).toBeInTheDocument()
@@ -71,7 +82,7 @@ describe("Pastebin", () => {
   })
 
   it("refuse illegal settings", async () => {
-    render(<PasteBin />)
+    render(<PasteBin config={__WRANGLER_CONFIG__} />)
     // due to bugs https://github.com/adobe/react-spectrum/discussions/8037, we need to use duplicated name here
     const expire = screen.getByRole("textbox", { name: "Expiration" })
     expect(expire).toBeValid()
@@ -83,7 +94,7 @@ describe("Pastebin", () => {
 describe("Pastebin admin page", () => {
   it("renders admin page", async () => {
     vi.stubGlobal("location", new URL("https://example.com/abcd:xxxxxxxxx"))
-    render(<PasteBin />)
+    render(<PasteBin config={__WRANGLER_CONFIG__} />)
 
     const editor = screen.getByRole("textbox", { name: "Paste editor" })
     await userEvent.click(editor) // meaningless click, just ensure useEffect is done

@@ -1,6 +1,6 @@
 import { test, it, expect, describe } from "vitest"
 
-import { genRandStr } from "../common"
+import { genRandStr } from "../common.js"
 
 import {
   genRandomBlob,
@@ -12,10 +12,10 @@ import {
   uploadExpectStatus,
   staticPages,
   addRole,
-} from "./testUtils"
+} from "./testUtils.js"
 import { createExecutionContext } from "cloudflare:test"
-import { DEFAULT_PASSWD_LEN, PASTE_NAME_LEN } from "../../shared/constants"
-import { parsePath } from "../../shared/parsers"
+import { DEFAULT_PASSWD_LEN, PASTE_NAME_LEN } from "../../shared/constants.js"
+import { parsePath } from "../../shared/parsers.js"
 
 describe("upload", () => {
   const blob1 = genRandomBlob(1024)
@@ -139,7 +139,7 @@ test("GET special static pages", async () => {
     [name, name],
     [name + ".jpg", name + ".jpg"],
     [name + ".jpg?lang=cpp", name + ".jpg"],
-    [name + "/a.jpg", name + "/a.jpg"],
+    [name + "/a.jpg", name + " / a.jpg"],
   ]
   for (const [accessPath, expectedTitle] of testPairs) {
     const resp = await (await workerFetch(ctx, `${BASE_URL}/d/${accessPath}`)).text()
@@ -148,6 +148,16 @@ test("GET special static pages", async () => {
       `testing access ${accessPath}, returning ${resp}`,
     ).toStrictEqual(true)
   }
+
+  // Paste with filename in metadata: bare URL should fall back to that filename
+  // in the <title> too, not just to the bare paste name.
+  const namedResp = await upload(ctx, { c: { content: genRandomBlob(1024), filename: "song.mp3" } })
+  const namedName = parsePath(new URL(namedResp.url).pathname).name
+  const namedHtml = await (await workerFetch(ctx, `${BASE_URL}/d/${namedName}`)).text()
+  expect(
+    namedHtml.includes(`/ ${namedName} / song.mp3</title>`),
+    `bare URL should include metadata filename`,
+  ).toStrictEqual(true)
 
   // test manage page
   const manageUrl = resp.manageUrl

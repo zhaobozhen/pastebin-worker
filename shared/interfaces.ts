@@ -2,14 +2,7 @@
 
 export type PasteLocation = "KV" | "R2"
 
-export type PasteResponse = {
-  url: string
-  manageUrl: string
-  expirationSeconds: number
-  expireAt: string
-}
-
-export type MetaResponse = {
+export interface MetaResponse {
   lastModifiedAt: string
   createdAt: string
   expireAt: string
@@ -20,8 +13,28 @@ export type MetaResponse = {
   encryptionScheme?: string
 }
 
-export type MPUCreateResponse = {
+export interface PasteResponse extends MetaResponse {
+  url: string
+  manageUrl: string
+  expirationSeconds: number
+}
+
+export interface MPUCreateResponse {
   name: string
   key: string
   uploadId: string
+}
+
+export interface SerializedPasteData {
+  content: string
+  metadata: MetaResponse
+  name: string
+  isBinary: boolean
+  guessedEncoding: string | null
+}
+
+declare global {
+  interface Window {
+    __PASTE_DATA__?: SerializedPasteData
+  }
 }

@@ -1,19 +1,13 @@
 import { dateToUnix, workerAssert, WorkerError } from "../common.js"
 import { parseSize } from "../../shared/parsers.js"
-import { PasteLocation } from "../../shared/interfaces.js"
+import type { MetaResponse, PasteLocation } from "../../shared/interfaces.js"
 
 // since CF does not allow expiration shorter than 60s, extend the expiration to 70s
 const PASTE_EXPIRE_SPECIFIED_MIN = 70
 
-/* Since we need the metadata stored in KV to perform R2 cleanup,
- the paste in KV should not be deleted until it is cleaned in R2.
- We extend the lifetime by 2 days to avoid it being cleaned in VK too early
- */
-const PASTE_EXPIRE_EXTENSION_FOR_R2 = 2 * 24 * 60 * 60
-
 // TODO: allow admin to upload permanent paste
 // TODO: add filename length check
-export type PasteMetadata = {
+export interface PasteMetadata {
   schemaVersion: 1
   location: PasteLocation // new field on V1
   passwd: string
@@ -29,7 +23,7 @@ export type PasteMetadata = {
   encryptionScheme?: string
 }
 
-type PasteMetadataInStorage = {
+interface PasteMetadataInStorage {
   schemaVersion: number
   location?: PasteLocation
   passwd: string
@@ -43,6 +37,19 @@ type PasteMetadataInStorage = {
   filename?: string
   highlightLanguage?: string
   encryptionScheme?: string
+}
+
+export function metaResponseFromMetadata(metadata: PasteMetadata): MetaResponse {
+  return {
+    lastModifiedAt: new Date(metadata.lastModifiedAtUnix * 1000).toISOString(),
+    createdAt: new Date(metadata.createdAtUnix * 1000).toISOString(),
+    expireAt: new Date(metadata.willExpireAtUnix * 1000).toISOString(),
+    sizeBytes: metadata.sizeBytes,
+    location: metadata.location,
+    filename: metadata.filename,
+    highlightLanguage: metadata.highlightLanguage,
+    encryptionScheme: metadata.encryptionScheme,
+  }
 }
 
 function migratePasteMetadata(original: PasteMetadataInStorage): PasteMetadata {
@@ -63,7 +70,7 @@ function migratePasteMetadata(original: PasteMetadataInStorage): PasteMetadata {
   }
 }
 
-export type PasteWithMetadata = {
+export interface PasteWithMetadata {
   paste: ArrayBuffer | ReadableStream
   metadata: PasteMetadata
   httpEtag?: string
@@ -160,24 +167,23 @@ export async function updatePaste(
   content: ArrayBuffer | ReadableStream,
   originalMetadata: PasteMetadata,
   options: WriteOptions,
-) {
+): Promise<PasteMetadata> {
   const expirationUnix = dateToUnix(options.now) + options.expirationSeconds
-  let expirationUnixSpecified =
+  const expirationUnixSpecified =
     dateToUnix(options.now) + Math.max(options.expirationSeconds, PASTE_EXPIRE_SPECIFIED_MIN)
-
-  if (originalMetadata.location === "R2") {
-    expirationUnixSpecified = expirationUnixSpecified + PASTE_EXPIRE_EXTENSION_FOR_R2
-
-    if (!options.isMPUComplete) {
-      await env.R2.put(pasteName, content)
-    }
-  }
 
   // if the paste is previous on R2, we keep it on R2 to avoid losing reference to it
   const newLocation =
     originalMetadata.location === "R2" || options.isMPUComplete || options.contentLength > parseSize(env.R2_THRESHOLD)!
       ? "R2"
       : "KV"
+
+  if (newLocation === "R2" && !options.isMPUComplete) {
+    await env.R2.put(pasteName, content, {
+      customMetadata: { willExpireAtUnix: String(expirationUnix) },
+    })
+  }
+
   const metadata: PasteMetadata = {
     schemaVersion: 1,
     location: newLocation,
@@ -193,10 +199,12 @@ export async function updatePaste(
     encryptionScheme: options.encryptionScheme,
   }
 
-  await env.PB.put(pasteName, originalMetadata.location === "R2" ? "" : content, {
+  await env.PB.put(pasteName, newLocation === "R2" ? "" : content, {
     metadata: metadata,
     expiration: expirationUnixSpecified,
   })
+
+  return metadata
 }
 
 export async function createPaste(
@@ -204,19 +212,17 @@ export async function createPaste(
   pasteName: string,
   content: ArrayBuffer | ReadableStream,
   options: WriteOptions,
-) {
+): Promise<PasteMetadata> {
   const expirationUnix = dateToUnix(options.now) + options.expirationSeconds
 
-  let expirationUnixSpecified =
+  const expirationUnixSpecified =
     dateToUnix(options.now) + Math.max(options.expirationSeconds, PASTE_EXPIRE_SPECIFIED_MIN)
 
   const location = options.isMPUComplete || options.contentLength > parseSize(env.R2_THRESHOLD)! ? "R2" : "KV"
-  if (location === "R2") {
-    expirationUnixSpecified = expirationUnixSpecified + PASTE_EXPIRE_EXTENSION_FOR_R2
-
-    if (!options.isMPUComplete) {
-      await env.R2.put(pasteName, content)
-    }
+  if (location === "R2" && !options.isMPUComplete) {
+    await env.R2.put(pasteName, content, {
+      customMetadata: { willExpireAtUnix: String(expirationUnix) },
+    })
   }
 
   const metadata: PasteMetadata = {
@@ -238,6 +244,8 @@ export async function createPaste(
     metadata: metadata,
     expiration: expirationUnixSpecified,
   })
+
+  return metadata
 }
 
 export async function pasteNameAvailable(env: Env, pasteName: string): Promise<boolean> {
@@ -252,54 +260,58 @@ export async function pasteNameAvailable(env: Env, pasteName: string): Promise<b
 }
 
 export async function deletePaste(env: Env, pasteName: string, originalMetadata: PasteMetadata): Promise<void> {
-  await env.PB.delete(pasteName)
   if (originalMetadata.location === "R2") {
     await env.R2.delete(pasteName)
   }
+  await env.PB.delete(pasteName)
 }
 
 export async function cleanExpiredInR2(env: Env, controller: ScheduledController) {
-  // types generated by wrangler somehow not working, so cast manually
-  type Listed = {
-    list_complete: false
-    keys: KVNamespaceListKey<PasteMetadataInStorage, string>[]
-    cursor: string
-    cacheStatus: string | null
-  }
-
   const nowUnix = controller.scheduledTime / 1000
 
-  let numCleaned = 0
-  const r2NamesToClean: string[] = []
+  // phase 1: collect all expired keys
+  const toDelete: string[] = []
 
-  async function clean() {
-    await env.R2.delete(r2NamesToClean)
-    numCleaned += r2NamesToClean.length
-    r2NamesToClean.length = 0
-  }
-
-  let cursor: string | null = null
+  let cursor: string | undefined
   while (true) {
-    const listed = (await env.PB.list<PasteMetadataInStorage>({ cursor })) as Listed
+    const listed = await env.R2.list({ cursor, limit: 1000, include: ["customMetadata"] })
 
-    cursor = listed.cursor
-
-    for (const key of listed.keys) {
-      if (key.metadata !== undefined) {
-        const metadata = migratePasteMetadata(key.metadata)
-        if (metadata.location === "R2" && metadata.willExpireAtUnix < nowUnix) {
-          r2NamesToClean.push(key.name)
-
-          if (r2NamesToClean.length === 1000) {
-            await clean()
-          }
+    // separate objects with and without custom metadata
+    const needKvLookup: R2Object[] = []
+    for (const obj of listed.objects) {
+      const expStr = obj.customMetadata?.willExpireAtUnix
+      if (expStr) {
+        if (Number(expStr) < nowUnix) {
+          toDelete.push(obj.key)
         }
+      } else {
+        needKvLookup.push(obj)
       }
     }
 
-    if (listed.list_complete) break
-  }
-  await clean()
+    // batch KV lookups for legacy/MPU objects without custom metadata
+    const kvResults = await Promise.all(needKvLookup.map((obj) => getPasteMetadata(env, obj.key)))
+    for (let i = 0; i < needKvLookup.length; i++) {
+      const kvMeta = kvResults[i]
+      if (kvMeta === null || kvMeta.willExpireAtUnix < nowUnix) {
+        toDelete.push(needKvLookup[i].key)
+      }
+    }
 
-  console.log(`${numCleaned} buckets cleaned`)
+    if (listed.truncated) {
+      cursor = listed.cursor
+    } else {
+      break
+    }
+  }
+
+  // phase 2: batch delete in chunks of 1000
+  let numCleaned = 0
+  for (let i = 0; i < toDelete.length; i += 1000) {
+    const batch = toDelete.slice(i, i + 1000)
+    await env.R2.delete(batch)
+    numCleaned += batch.length
+  }
+
+  console.log(`${numCleaned} R2 objects cleaned`)
 }

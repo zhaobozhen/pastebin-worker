@@ -1,17 +1,14 @@
-// inspired by https://css-tricks.com/creating-an-editable-textarea-that-supports-syntax-highlighted-code/
-
-import React, { useEffect, useRef, useState } from "react"
-import { Autocomplete, AutocompleteItem, Input, Select, SelectItem } from "@heroui/react"
+import React, { useEffect, useMemo, useRef, useState } from "react"
+import type { SelectHandle } from "./ui/index.js"
+import { Autocomplete, AutocompleteItem, Input, Select, SelectItem } from "./ui/index.js"
 
 import { autoCompleteOverrides, inputOverrides, selectOverrides, tst } from "../utils/overrides.js"
-import { useHLJS, highlightHTML } from "../utils/HighlightLoader.js"
+import { highlightHTML, useAvailableLanguages, useHljsForLang } from "../utils/highlight.js"
+import { XIcon } from "./icons.js"
 
 import "../styles/highlight-theme-light.css"
 import "../styles/highlight-theme-dark.css"
 
-// TODO:
-// - line number
-// - clear button
 interface CodeInputProps extends React.HTMLProps<HTMLDivElement> {
   content: string
   setContent: (code: string) => void
@@ -41,7 +38,7 @@ function formatTabSetting(s: TabSetting, forHuman: boolean) {
 }
 
 function parseTabSetting(s: string): TabSetting | undefined {
-  const match = s.match(/^(tab|space) ([24])$/)
+  const match = /^(tab|space) ([248])$/.exec(s)
   if (match) {
     return { char: match[1] as TabSetting["char"], width: parseInt(match[2]) as TabSetting["width"] }
   } else {
@@ -59,7 +56,7 @@ const tabSettings: TabSetting[] = [
 ]
 
 function handleNewLines(str: string): string {
-  if (str.at(-1) === "\n") {
+  if (str.endsWith("\n")) {
     str += " "
   }
   return str
@@ -80,12 +77,14 @@ export function CodeEditor({
   const refHighlighting = useRef<HTMLPreElement | null>(null)
   const refTextarea = useRef<HTMLTextAreaElement | null>(null)
   const refLineNumbers = useRef<HTMLSpanElement | null>(null)
-
-  const [heightPx, setHeightPx] = useState<number>(0)
-  const hljs = useHLJS()
-  const [tabSetting, setTabSettings] = useState<TabSetting>({ char: "space", width: 2 })
+  const refIndentWith = useRef<SelectHandle | null>(null)
 
   const lineCount = (content?.match(/\n/g)?.length || 0) + 1
+  const lineNumbers = useMemo(() => Array.from({ length: lineCount }, (_, idx) => <span key={idx} />), [lineCount])
+  const [heightPx, setHeightPx] = useState<number>(Math.max(lineCount * 24, 100)) // Estimate initial height for SSR
+  const hljs = useHljsForLang(lang)
+  const availableLanguages = useAvailableLanguages()
+  const [tabSetting, setTabSettings] = useState<TabSetting>({ char: "space", width: 2 })
 
   function syncScroll() {
     refHighlighting.current!.scrollLeft = refTextarea.current!.scrollLeft
@@ -103,7 +102,10 @@ export function CodeEditor({
 
   function handleKeyDown(event: React.KeyboardEvent<HTMLTextAreaElement>) {
     const element = refTextarea.current!
-    if (event.key === "Tab") {
+    if (event.key === "Tab" && event.shiftKey) {
+      event.preventDefault()
+      refIndentWith.current?.focus()
+    } else if (event.key === "Tab") {
       event.preventDefault() // stop normal
       const beforeTab = content.slice(0, element.selectionStart)
       const afterTab = content.slice(element.selectionEnd, element.value.length)
@@ -141,35 +143,46 @@ export function CodeEditor({
     <div className={className} {...rest}>
       <div className={"mb-2 gap-2 flex flex-row" + " "}>
         <Input
+          className="flex-1"
           classNames={inputOverrides}
           type={"text"}
           label={"File name"}
+          placeholder={"No filename"}
           size={"sm"}
           value={filename || ""}
           onValueChange={setFilename}
+          isClearable
         />
         <Autocomplete
-          className={"max-w-[10em]"}
+          className={"max-w-[8em]"}
           classNames={autoCompleteOverrides}
           label={"Language"}
           size={"sm"}
-          defaultItems={hljs ? hljs.listLanguages().map((lang) => ({ key: lang })) : []}
+          isClearable
+          defaultItems={availableLanguages.map((lang) => ({ key: lang }))}
           // we must not use undefined here to avoid conversion from uncontrolled component to controlled component
-          selectedKey={hljs && lang && hljs.listLanguages().includes(lang) ? lang : ""}
+          selectedKey={lang && availableLanguages.includes(lang) ? lang : ""}
           onSelectionChange={(key) => {
-            setLang((key as string) || undefined) // when key is empty string, convert back to undefined
+            setLang(key || undefined) // when key is empty string, convert back to undefined
           }}
         >
-          {(language) => <AutocompleteItem key={language.key}>{language.key}</AutocompleteItem>}
+          {(language: { key: string }) => (
+            <AutocompleteItem key={language.key} value={language.key}>
+              {language.key}
+            </AutocompleteItem>
+          )}
         </Autocomplete>
         <Select
+          ref={refIndentWith}
           size={"sm"}
           label={"Indent With"}
-          className={"max-w-[10em] text-foreground"}
+          className={"w-[6em] text-foreground"}
           classNames={selectOverrides}
           selectedKeys={[formatTabSetting(tabSetting, false)]}
           onSelectionChange={(s) => {
-            setTabSettings(parseTabSetting(s.currentKey as string)!)
+            const key = Array.from(s)[0]
+            const parsed = parseTabSetting(key)
+            if (parsed) setTabSettings(parsed)
           }}
         >
           {tabSettings.map((s) => (
@@ -177,7 +190,9 @@ export function CodeEditor({
           ))}
         </Select>
       </div>
-      <div className={`w-full bg-default-100 ${tst} rounded-xl p-2 relative`}>
+      <div
+        className={`text-sm w-full bg-default-100 ${tst} rounded-xl p-2 relative border border-default-200 hover:border-default-400 focus-within:border-default-400`}
+      >
         <div
           className={`relative w-full`}
           style={{ tabSize: tabSetting.char === "tab" ? tabSetting.width : undefined }}
@@ -197,9 +212,7 @@ export function CodeEditor({
               }
               style={{ height: `${heightPx}px` }}
             >
-              {Array.from({ length: lineCount }, (_, idx) => {
-                return <span key={idx} />
-              })}
+              {lineNumbers}
             </span>
           </div>
           <textarea
@@ -218,6 +231,20 @@ export function CodeEditor({
             aria-label={"Paste editor"}
           ></textarea>
         </div>
+        {content && !disabled && (
+          <button
+            type="button"
+            onClick={() => {
+              setContent("")
+              refTextarea.current?.focus()
+            }}
+            tabIndex={-1}
+            className="absolute top-3 right-3 text-default-400 hover:text-default-700 transition-colors"
+            aria-label="Clear editor"
+          >
+            <XIcon className="w-4 h-4" />
+          </button>
+        )}
       </div>
     </div>
   )

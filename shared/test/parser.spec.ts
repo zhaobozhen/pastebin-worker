@@ -1,10 +1,12 @@
 import { expect, test } from "vitest"
+import type { ParsedPath } from "../parsers.js"
 import {
   parsePath,
-  ParsedPath,
+  ParseError,
   parseFilenameFromContentDisposition,
   parseExpiration,
   parseExpirationReadable,
+  parseSize,
 } from "../parsers.js"
 
 test("parsePath", () => {
@@ -36,15 +38,60 @@ test("parsePath", () => {
   }
 })
 
+test("parsePath throws on empty name", () => {
+  const emptyNamePaths = ["/", "/.well-known/", "/.jpg"]
+  for (const input of emptyNamePaths) {
+    expect(() => parsePath(input), `should throw for ${input}`).toThrow(ParseError)
+  }
+})
+
 test("parseFilenameFromContentDisposition", () => {
-  const testPairs: [string, string][] = [
+  const testPairs: [string, string | undefined][] = [
     [`inline; filename="abc.jpg"`, "abc.jpg"],
     [`inline; filename*=UTF-8''${encodeURIComponent("abc.jpg")}`, "abc.jpg"],
     [`inline; filename*=UTF-8''${encodeURIComponent("りんご")}`, "りんご"],
+    // filename* takes precedence over filename when both present
+    [`inline; filename="ascii.jpg"; filename*=UTF-8''${encodeURIComponent("りんご.jpg")}`, "りんご.jpg"],
+    // attachment instead of inline; only quoted filename
+    [`attachment; filename="report.pdf"`, "report.pdf"],
+    // no filename hint at all
+    [`inline`, undefined],
+    [``, undefined],
   ]
   for (const [input, output] of testPairs) {
     const parsed = parseFilenameFromContentDisposition(input)
     expect(parsed, `checking filename of ${input}`).toStrictEqual(output)
+  }
+})
+
+test("parseSize", () => {
+  const testPairs: [string, number | null][] = [
+    ["0", 0],
+    ["1024", 1024],
+    ["1K", 1024],
+    ["1M", 1024 * 1024],
+    ["1G", 1024 * 1024 * 1024],
+    ["1.5K", 1536],
+    ["10 K", 10 * 1024],
+    [" 10 K ", 10 * 1024],
+
+    // invalid: lowercase suffix not accepted
+    ["1k", null],
+    ["1m", null],
+    // invalid: malformed number
+    ["1.1.1K", null],
+    ["1.K", null],
+    [".5K", null],
+    ["abc", null],
+    ["", null],
+    // invalid: negative
+    ["-1K", null],
+    // invalid: stray suffix
+    ["1KB", null],
+    ["1T", null],
+  ]
+  for (const [input, expected] of testPairs) {
+    expect(parseSize(input), `checking size of ${JSON.stringify(input)}`).toStrictEqual(expected)
   }
 })
 

@@ -8,11 +8,11 @@ import {
   upload,
   uploadExpectStatus,
   workerFetch,
-} from "./testUtils"
+} from "./testUtils.js"
 import { createExecutionContext, env } from "cloudflare:test"
-import { MetaResponse } from "../../shared/interfaces"
-import { MAX_PASSWD_LEN, MIN_PASSWD_LEN, PRIVATE_PASTE_NAME_LEN } from "../../shared/constants"
-import { parseExpiration } from "../../shared/parsers"
+import type { MetaResponse } from "../../shared/interfaces.js"
+import { MAX_PASSWD_LEN, MIN_PASSWD_LEN, PRIVATE_PASTE_NAME_LEN } from "../../shared/constants.js"
+import { parseExpiration } from "../../shared/parsers.js"
 
 test("privacy url with option p", async () => {
   const blob1 = genRandomBlob(1024)
@@ -22,7 +22,7 @@ test("privacy url with option p", async () => {
   const responseJson = await upload(ctx, { c: blob1, p: "1" })
 
   // check url
-  const url = responseJson["url"]
+  const url = responseJson.url
   expect(url.startsWith(BASE_URL))
 
   // check name
@@ -42,7 +42,7 @@ test("expire with option e", async () => {
 
   async function testExpireParse(expire: string, expireSecs: number | null) {
     const responseJson = await upload(ctx, { c: blob1, e: expire })
-    expect(responseJson["expirationSeconds"]).toStrictEqual(expireSecs)
+    expect(responseJson.expirationSeconds).toStrictEqual(expireSecs)
   }
 
   const maxExpirationSeconds = parseExpiration(env.MAX_EXPIRATION)!
@@ -80,10 +80,10 @@ test("custom path with option n", async () => {
     c: blob1,
     n: goodName,
   })
-  expect(uploadResponseJson["url"]).toStrictEqual(`${BASE_URL}/~${goodName}`)
+  expect(uploadResponseJson.url).toStrictEqual(`${BASE_URL}/~${goodName}`)
 
   // check revisit
-  const revisitResponse = await workerFetch(ctx, uploadResponseJson["url"])
+  const revisitResponse = await workerFetch(ctx, uploadResponseJson.url)
   expect(revisitResponse.status).toStrictEqual(200)
   expect(await areBlobsEqual(await revisitResponse.blob(), blob1)).toStrictEqual(true)
 })
@@ -131,21 +131,24 @@ test("encryption with option encryption-scheme", async () => {
   expect(fetchPaste.headers.get("Content-Type")).toStrictEqual("application/octet-stream")
   expect(fetchPaste.headers.get("Content-Disposition")).toStrictEqual("inline; filename*=UTF-8''a.pdf.encrypted")
   expect(fetchPaste.headers.get("X-PB-Encryption-Scheme")).toStrictEqual("AES-GCM")
-  expect(fetchPaste.headers.get("Access-Control-Expose-Headers")?.includes("X-PB-Encryption-Scheme")).toStrictEqual(
-    true,
-  )
+  expect(fetchPaste.headers.get("X-PB-Decrypted-Content-Type")).toStrictEqual("application/pdf")
+  const exposed = fetchPaste.headers.get("Access-Control-Expose-Headers") ?? ""
+  expect(exposed.includes("X-PB-Encryption-Scheme")).toStrictEqual(true)
+  expect(exposed.includes("X-PB-Decrypted-Content-Type")).toStrictEqual(true)
 
   // fetch with filename, now the content-disposition and content-type should be changed
   const fetchPasteWithFilename = await workerFetch(ctx, url + "/b.pdf")
   await fetchPasteWithFilename.bytes()
   expect(fetchPasteWithFilename.headers.get("Content-Disposition")).toStrictEqual("inline; filename*=UTF-8''b.pdf")
   expect(fetchPasteWithFilename.headers.get("Content-Type")).toStrictEqual("application/pdf")
+  expect(fetchPasteWithFilename.headers.get("X-PB-Decrypted-Content-Type")).toStrictEqual("application/pdf")
 
   // fetch with ext, now only the content-type is chaanged
   const fetchPasteWithExt = await workerFetch(ctx, url + ".pdf")
   await fetchPasteWithExt.bytes()
   expect(fetchPasteWithExt.headers.get("Content-Disposition")).toStrictEqual("inline; filename*=UTF-8''a.pdf.encrypted")
   expect(fetchPasteWithExt.headers.get("Content-Type")).toStrictEqual("application/pdf")
+  expect(fetchPasteWithExt.headers.get("X-PB-Decrypted-Content-Type")).toStrictEqual("application/pdf")
 
   const fetchMeta: MetaResponse = await (await workerFetch(ctx, addRole(url, "m"))).json()
   expect(fetchMeta.encryptionScheme).toStrictEqual("AES-GCM")

@@ -1,12 +1,15 @@
-import { decode, isLegalUrl, WorkerError } from "../common.js"
-import { getDocPage } from "../pages/docs.js"
+import { decode, WorkerError, escapeHtml } from "../common.js"
+import { isLegalUrl } from "../../shared/verify.js"
+import { getDocMarkdown, getCurlIndexMarkdown, renderDocAsHtml } from "../pages/docs.js"
 import { verifyAuth } from "../pages/auth.js"
 import mime from "mime"
 import { makeMarkdown } from "../pages/markdown.js"
-import { getPaste, getPasteMetadata, PasteMetadata, PasteWithMetadata } from "../storage/storage.js"
-import { MetaResponse } from "../../shared/interfaces.js"
+import type { PasteMetadata, PasteWithMetadata } from "../storage/storage.js"
+import { getPaste, getPasteMetadata, metaResponseFromMetadata } from "../storage/storage.js"
 import { parsePath } from "../../shared/parsers.js"
 import { MAX_URL_REDIRECT_LEN } from "../../shared/constants.js"
+import manifest from "../../dist/frontend/.vite/ssr-manifest.json"
+import { getAssetPaths, renderCssLinks, DARK_MODE_SCRIPT } from "../ssrUtils.js"
 
 type Headers = Record<string, string>
 
@@ -42,8 +45,29 @@ function lastModifiedHeader(metadata: PasteMetadata): Headers {
   return lastModified ? { "Last-Modified": new Date(lastModified * 1000).toUTCString() } : {}
 }
 
+function isCurlAgent(request: Request): boolean {
+  const ua = request.headers.get("User-Agent") || ""
+  return ua.toLowerCase().startsWith("curl/")
+}
+
 async function handleStaticPages(request: Request, env: Env, _: ExecutionContext): Promise<Response | null> {
   const url = new URL(request.url)
+  const isCurl = isCurlAgent(request)
+
+  // Serve doc/index.md as plain markdown for curl on "/" or anyone on "/index.md"
+  if ((url.pathname === "/" && isCurl) || url.pathname === "/index.md") {
+    const authResponse = verifyAuth(request, env)
+    if (authResponse !== null) {
+      return authResponse
+    }
+    return new Response(getCurlIndexMarkdown(env), {
+      headers: {
+        "Content-Type": "text/plain;charset=UTF-8",
+        Vary: "User-Agent",
+        ...staticPageCacheHeader(env),
+      },
+    })
+  }
 
   let path = url.pathname
   if (path.endsWith("/")) {
@@ -53,13 +77,65 @@ async function handleStaticPages(request: Request, env: Env, _: ExecutionContext
   } else if (path.lastIndexOf("/") === 0 && path.indexOf(":") > 0) {
     path = "/index.html" // handle admin URL
   }
-  if (path.startsWith("/assets/") || path === "/favicon.ico" || path === "/index.html") {
-    if (path === "/index.html") {
-      const authResponse = verifyAuth(request, env)
-      if (authResponse !== null) {
-        return authResponse
-      }
+
+  // Handle index.html with SSR
+  if (path === "/index.html") {
+    // Auth check
+    const authResponse = verifyAuth(request, env)
+    if (authResponse !== null) {
+      return authResponse
     }
+
+    // Try SSR
+    try {
+      const { renderIndexPage } = await import("../pages/index.js")
+      const page = await renderIndexPage(env, url.pathname)
+      if (page) {
+        return new Response(page, {
+          headers: {
+            "Content-Type": "text/html;charset=UTF-8",
+            ...staticPageCacheHeader(env),
+          },
+        })
+      }
+      // SSR skipped (admin URL), continue to CSR fallback
+    } catch (e) {
+      console.error("SSR failed for index page, falling back to CSR:", e)
+    }
+
+    // CSR fallback: dynamically generate empty HTML shell
+    const { jsFile, cssPaths } = getAssetPaths(manifest, "index.html")
+
+    return new Response(
+      `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<link rel="icon" href="/favicon.ico" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>${escapeHtml(env.INDEX_PAGE_TITLE)}</title>
+${renderCssLinks(cssPaths)}
+<script>
+${DARK_MODE_SCRIPT}
+</script>
+<script>window.__WRANGLER_CONFIG__=${JSON.stringify(env)}</script>
+</head>
+<body>
+<div id="root"></div>
+<script type="module" src="/${jsFile}"></script>
+</body>
+</html>`,
+      {
+        headers: {
+          "Content-Type": "text/html;charset=UTF-8",
+          ...staticPageCacheHeader(env),
+        },
+      },
+    )
+  }
+
+  // Handle other static assets
+  if (path.startsWith("/assets/") || path === "/favicon.ico") {
     const assetsUrl = url
     assetsUrl.pathname = path
     const resp = await env.ASSETS.fetch(assetsUrl)
@@ -76,19 +152,21 @@ async function handleStaticPages(request: Request, env: Env, _: ExecutionContext
     }
   }
 
-  const staticPageContent = getDocPage(url.pathname, env)
-  if (staticPageContent) {
-    // access to all static pages requires auth
-    const authResponse = verifyAuth(request, env)
-    if (authResponse !== null) {
-      return authResponse
+  if (url.pathname === "/doc" || url.pathname.startsWith("/doc/")) {
+    const isExplicitMd = url.pathname.endsWith(".md")
+    const lookupPath = isExplicitMd ? url.pathname.slice(0, -3) : url.pathname
+    const docMd = getDocMarkdown(lookupPath, env)
+    if (docMd !== null) {
+      const wantsMarkdown = isExplicitMd || isCurl
+      return new Response(wantsMarkdown ? docMd : renderDocAsHtml(docMd), {
+        headers: {
+          "Content-Type": wantsMarkdown ? "text/plain;charset=UTF-8" : "text/html;charset=UTF-8",
+          Vary: "User-Agent",
+          ...staticPageCacheHeader(env),
+        },
+      })
     }
-    return new Response(staticPageContent, {
-      headers: {
-        "Content-Type": "text/html;charset=UTF-8",
-        ...staticPageCacheHeader(env),
-      },
-    })
+    throw new WorkerError(404, `doc page '${url.pathname}' not found`)
   }
 
   return null
@@ -114,7 +192,7 @@ export async function handleGet(request: Request, env: Env, ctx: ExecutionContex
 
   // when not isHead, always need to get paste unless "m"
   // when isHead, no need to get paste unless "u"
-  const shouldGetPasteContent = (!isHead && role !== "m" && role !== "d") || (isHead && role === "u")
+  const shouldGetPasteContent = (!isHead && role !== "m") || (isHead && role === "u")
 
   const item: PasteWithMetadata | null = shouldGetPasteContent
     ? await getPaste(env, name, ctx)
@@ -125,16 +203,21 @@ export async function handleGet(request: Request, env: Env, ctx: ExecutionContex
     throw new WorkerError(404, `paste of name '${name}' not found`)
   }
 
-  let inferred_mime =
+  const disallowedMimes = env.DISALLOWED_MIME_FOR_PASTE as readonly string[]
+  const sanitize = (m: string) => (disallowedMimes.includes(m) ? "text/plain;charset=UTF-8" : m)
+
+  const realMime =
     url.searchParams.get("mime") ||
     (ext && mime.getType(ext)) ||
-    (item.metadata.encryptionScheme && "application/octet-stream") ||
     (item.metadata.filename && mime.getType(item.metadata.filename)) ||
     "text/plain;charset=UTF-8"
 
-  if (env.DISALLOWED_MIME_FOR_PASTE.includes(inferred_mime)) {
-    inferred_mime = "text/plain;charset=UTF-8"
-  }
+  let inferred_mime = item.metadata.encryptionScheme
+    ? url.searchParams.get("mime") || (ext && mime.getType(ext)) || "application/octet-stream"
+    : realMime
+  inferred_mime = sanitize(inferred_mime)
+
+  const decryptedContentType = item.metadata.encryptionScheme ? sanitize(realMime) : null
 
   // check `if-modified-since`
   const pasteLastModifiedUnix = item.metadata.lastModifiedAtUnix
@@ -181,16 +264,7 @@ export async function handleGet(request: Request, env: Env, ctx: ExecutionContex
 
   // handle metadata access
   if (role === "m") {
-    const returnedMetadata: MetaResponse = {
-      lastModifiedAt: new Date(item.metadata.lastModifiedAtUnix * 1000).toISOString(),
-      createdAt: new Date(item.metadata.createdAtUnix * 1000).toISOString(),
-      expireAt: new Date(item.metadata.willExpireAtUnix * 1000).toISOString(),
-      sizeBytes: item.metadata.sizeBytes,
-      location: item.metadata.location,
-      filename: item.metadata.filename,
-      highlightLanguage: item.metadata.highlightLanguage,
-      encryptionScheme: item.metadata.encryptionScheme,
-    }
+    const returnedMetadata = metaResponseFromMetadata(item.metadata)
     return new Response(isHead ? null : JSON.stringify(returnedMetadata, null, 2), {
       headers: {
         "Content-Type": `application/json;charset=UTF-8`,
@@ -200,14 +274,31 @@ export async function handleGet(request: Request, env: Env, ctx: ExecutionContex
     })
   }
 
-  // handle encrypted
+  // handle display page with SSR
   if (role === "d") {
+    try {
+      const { renderDisplayPage } = await import("../pages/display.js")
+      const page = await renderDisplayPage(env, name, filename, ext, item.paste, item.metadata)
+      if (page) {
+        return new Response(isHead ? null : page, {
+          headers: {
+            "Content-Type": `text/html;charset=UTF-8`,
+            ...pasteCacheHeader(env),
+            ...lastModifiedHeader(item.metadata),
+          },
+        })
+      }
+      // SSR skipped (encrypted file), fall through to CSR
+    } catch (e) {
+      console.error("SSR failed, falling back to CSR:", e)
+    }
+    // CSR fallback
     const pageUrl = url
     pageUrl.search = ""
     pageUrl.pathname = "/display.html"
     const page = decode(await (await env.ASSETS.fetch(pageUrl)).arrayBuffer()).replace(
       "{{PASTE_NAME}}",
-      name + (filename ? "/" + filename : ext ? ext : ""),
+      name + (filename ? " / " + filename : ext ? ext : item.metadata.filename ? " / " + item.metadata.filename : ""),
     )
     return new Response(isHead ? null : page, {
       headers: {
@@ -229,6 +320,10 @@ export async function handleGet(request: Request, env: Env, ctx: ExecutionContex
   if (item.metadata.encryptionScheme) {
     headers["X-PB-Encryption-Scheme"] = item.metadata.encryptionScheme
     exposeHeaders.push("X-PB-Encryption-Scheme")
+    if (decryptedContentType !== null) {
+      headers["X-PB-Decrypted-Content-Type"] = decryptedContentType
+      exposeHeaders.push("X-PB-Decrypted-Content-Type")
+    }
   }
 
   if (item.metadata.highlightLanguage) {
@@ -237,7 +332,7 @@ export async function handleGet(request: Request, env: Env, ctx: ExecutionContex
   }
 
   if (item.httpEtag) {
-    headers["etag"] = item.httpEtag
+    headers.etag = item.httpEtag
   }
 
   if (returnFilename) {

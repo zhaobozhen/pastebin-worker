@@ -4,33 +4,44 @@ on:
     branches:
       - goshujin
 
+permissions:
+  contents: read
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    environment: deploy
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          persist-credentials: false
 
       - name: "Install Node"
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: "22"
-          cache: "yarn"
+
+      - name: "Install pnpm"
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+        with:
+          version: 10
 
       - name: "Setup"
-        run: yarn install
+        run: pnpm install --frozen-lockfile
 
       - name: "Build Frontend"
-        run: yarn build:frontend
+        run: pnpm build:frontend
 
       - name: "Test"
         run: |
-          yarn fmt
-          yarn lint
-          yarn test
+          pnpm fmt
+          pnpm lint
+          pnpm typecheck
+          pnpm test --testTimeout 15000
 
       - name: "Deploy"
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
         run: |
-          yarn deploy
+          pnpm wrangler deploy

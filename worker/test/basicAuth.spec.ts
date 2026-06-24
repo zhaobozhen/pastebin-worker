@@ -1,6 +1,6 @@
 import { expect, test, it, describe, beforeEach, afterEach } from "vitest"
-import { areBlobsEqual, BASE_URL, genRandomBlob, upload, uploadExpectStatus, workerFetch } from "./testUtils"
-import { encodeBasicAuth, decodeBasicAuth } from "../pages/auth"
+import { areBlobsEqual, BASE_URL, genRandomBlob, upload, uploadExpectStatus, workerFetch } from "./testUtils.js"
+import { encodeBasicAuth, decodeBasicAuth } from "../pages/auth.js"
 import { createExecutionContext, env } from "cloudflare:test"
 import { hashSync } from "bcrypt-ts"
 
@@ -24,7 +24,7 @@ describe("basic auth", () => {
     user1: "passwd1",
     user2: "passwd2",
   }
-  const authHeader = { Authorization: encodeBasicAuth("user1", users["user1"]) }
+  const authHeader = { Authorization: encodeBasicAuth("user1", users.user1) }
   const wrongAuthHeader = { Authorization: encodeBasicAuth("user1", "wrong-password") }
   const blob1 = genRandomBlob(1024)
 
@@ -41,9 +41,14 @@ describe("basic auth", () => {
   })
 
   it("should forbid accessing index without auth", async () => {
-    for (const page of ["", "index", "index.html"]) {
+    for (const page of ["", "index", "index.html", "index.md"]) {
       expect((await workerFetch(ctx, `${BASE_URL}/${page}`)).status, `visiting ${page}`).toStrictEqual(401)
     }
+  })
+
+  it("should forbid accessing curl index without auth", async () => {
+    const resp = await workerFetch(ctx, new Request(BASE_URL, { headers: { "User-Agent": "curl/8.0.0" } }))
+    expect(resp.status).toStrictEqual(401)
   })
 
   it("should allow accessing index without auth", async () => {
@@ -77,6 +82,12 @@ describe("basic auth", () => {
     const revisitUpdatedResp = await workerFetch(ctx, updateResp.url)
     expect(revisitUpdatedResp.status).toStrictEqual(200)
     expect(await areBlobsEqual(await revisitUpdatedResp.blob(), blob2)).toStrictEqual(true)
+  })
+
+  it("should allow accessing doc pages without auth", async () => {
+    for (const page of ["/doc/api", "/doc/tos", "/doc/curl"]) {
+      expect((await workerFetch(ctx, `${BASE_URL}${page}`)).status, `visiting ${page}`).toStrictEqual(200)
+    }
   })
 
   it("should delete without auth", async () => {

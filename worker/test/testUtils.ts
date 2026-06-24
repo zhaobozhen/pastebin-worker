@@ -3,17 +3,33 @@ import { env } from "cloudflare:test"
 import { expect } from "vitest"
 import crypto from "crypto"
 
-import worker from "../index"
-import { PasteResponse } from "../../shared/interfaces"
+import worker from "../index.js"
+import type { PasteResponse } from "../../shared/interfaces.js"
 
 export const BASE_URL: string = env.DEPLOY_URL
 export const RAND_NAME_REGEX = /^[ABCDEFGHJKMNPQRSTWXYZabcdefhijkmnprstwxyz2345678]+$/
 
-export const staticPages = ["", "index.html", "index", "tos", "tos.html", "api", "api.html", "favicon.ico"]
+export const staticPages = [
+  "",
+  "index.html",
+  "index",
+  "index.md",
+  "doc/tos",
+  "doc/tos.html",
+  "doc/tos.md",
+  "doc/api",
+  "doc/api.html",
+  "doc/api.md",
+  "doc/curl",
+  "doc/curl.html",
+  "doc/curl.md",
+  "doc/skill",
+  "doc/skill.html",
+  "doc/skill.md",
+  "favicon.ico",
+]
 
-type FormDataBuild = {
-  [key: string]: string | Blob | { content: Blob; filename: string }
-}
+type FormDataBuild = Record<string, string | Blob | { content: Blob; filename: string }>
 
 export async function workerFetch(ctx: ExecutionContext, req: Request | string) {
   // we are not using SELF.fetch since it sometimes do not print worker log to console
@@ -89,7 +105,7 @@ export function createFormData(kv: FormDataBuild): FormData {
       fd.set(k, v, "") // fd.set automatically set filename to k, not what we desired
     } else {
       // hack for typing
-      const { content, filename } = v as { content: Blob; filename: string }
+      const { content, filename } = v
       fd.set(k, content, filename)
     }
   })

@@ -1,4 +1,5 @@
 import { WorkerError } from "./common.js"
+import { ParseError } from "../shared/parsers.js"
 
 import { handleOptions, corsWrapResponse } from "./handlers/handleCors.js"
 import { handlePostOrPut } from "./handlers/handleWrite.js"
@@ -30,7 +31,9 @@ async function handleRequest(request: Request, env: Env, ctx: ExecutionContext):
       return response
     }
   } catch (e) {
-    if (e instanceof WorkerError) {
+    if (e instanceof ParseError) {
+      return corsWrapResponse(new Response(`Error 400: ${e.message}\n`, { status: 400 }))
+    } else if (e instanceof WorkerError) {
       return corsWrapResponse(
         new Response(`Error ${e.statusCode}: ${e.message}\n`, {
           status: e.statusCode,
